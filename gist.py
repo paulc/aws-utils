@@ -44,7 +44,7 @@ def gist(description,files,name,private,short,base64,config,account,token):
         for name in api_response['files']:
             click.echo("Raw URL ({}): {}".format(name,api_response['files'][name]['raw_url']))
         if short:
-            response = requests.post('https://git.io',files={'url':(None,api_response['html_url'])})
+            response = requests.post('https://git.io',files={'url':(None,api_response['raw_url'])})
             if response.ok:
                 click.echo("Short URL: {}".format(response.headers['Location']))
             else:
