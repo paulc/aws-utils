@@ -43,8 +43,12 @@ def gist(description,files,name,private,short,base64,config,account,token):
         click.echo("API URL: {}".format(api_response['url']))
         for name in api_response['files']:
             click.echo("Raw URL ({}): {}".format(name,api_response['files'][name]['raw_url']))
+            if short:
+                response = requests.post('https://git.io',files={'url':(None,api_response['files'][name]['raw_url'])})
+                short_url = response.headers['Location'] if response.ok else 'Error creating short URL'
+                click.echo("Short URL ({}): {}".format(name,short_url))
         if short:
-            response = requests.post('https://git.io',files={'url':(None,api_response['raw_url'])})
+            response = requests.post('https://git.io',files={'url':(None,api_response['html_url'])})
             if response.ok:
                 click.echo("Short URL: {}".format(response.headers['Location']))
             else:
