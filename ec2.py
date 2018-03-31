@@ -8,6 +8,8 @@ import textwrap
 import click
 import boto3
 
+from botocore.exceptions import ClientError
+
 from pprint import pprint
 
 from tabulate import tabulate
@@ -212,6 +214,44 @@ def new(ami,key,type,zone,min,max,sg):
         )
     pprint(response)
 
+
+@cli.command()
+@click.option('--params',default=None,help='Display parameters')
+@click.option('--filters',default=None,help='AMI filters')
+@click.option('--match',default=None,help='Match description')
+@click.option('--owner',default='amazon',help='AMI owner (default:amazon)')
+@click.option('--ami',default=None,help='AMI ID')
+def listami(params,filters,match,owner,ami):
+    params = params or '''
+        id:ImageId
+        description:Description?
+        platform:Platform?
+        arch:Architecture?
+    '''
+    def makefilter(name,value):
+        return {'Name':name,'Values':[value]}
+
+    filter_list = [ makefilter('image-type','machine'),
+          makefilter('is-public','true'),
+          makefilter('state','available'),
+    ]
+    if filters:
+        for f in filters.split(','):
+            n,v = f.split('=',1)
+            filter_list.append(makefilter(n,v))
+    ids = [ami] if ami else []
+
+    params = params.split()
+    ec2 = boto3.client('ec2')
+    try:
+        r = ec2.describe_images(Owners=[owner],Filters=filter_list,ImageIds=ids)
+        if match:
+            click.echo(tabulate([extract(x,*params) for x in r['Images'] if
+                match in x.get('Description','')],headers='keys'))
+        else:
+            click.echo(tabulate([extract(x,*params) for x in r['Images']],headers='keys'))
+    except ClientError as e:
+        click.echo(e)
 
 
 if __name__ == '__main__':
