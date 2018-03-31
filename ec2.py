@@ -92,6 +92,7 @@ def listsg(filters,fields):
                 rows.append(row)
         else:
             row = extract(sg,*fields)
+            rows.append(row)
     print(tabulate(rows,headers='keys'))
 
 @cli.command()
