@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 
+import os
 import re 
+import subprocess
+import textwrap
+
 import click
 import boto3
 
@@ -29,13 +33,16 @@ def getpath(data,path):
 def extract(data,*args):
     r = {}
     for arg in args:
-        name,key = arg.split(':',1) if ':' in arg else (arg,arg)
-        if name.endswith(']'):
-            m = re.match('(.*)\[(.*)\]$',name)
-            name,fs = m.groups()
-            r[name] = fs.join(getpath(data,key))
-        else:
-            r[name] = getpath(data,key)
+        try:
+            name,maxlen,fs,key = re.match('(.*?)(?:/(\d+))?(?:\[(.*)\])?:(.*)$',arg).groups()
+        except AttributeError:
+            name,maxlen,fs,key = arg,None,None,arg
+        v = getpath(data,key)
+        if fs:
+            v = fs.join(v)
+        if maxlen and len(v) > int(maxlen):
+            v = v[:int(maxlen)+3] + "..."
+        r[name] = v
     return r
 
 @click.group()
@@ -57,9 +64,17 @@ def parse_ip_permission(perms):
     return res
 
 @cli.command()
-def listsg():
+@click.option("--filters",multiple=True,help="SG name")
+@click.option("--fields",help="Display fields")
+def listsg(filters,fields):
+    fields = fields.split() if fields else """
+        name/30:GroupName
+        id:GroupId
+        description/40:Description
+    """.split()
     ec2 = boto3.client('ec2')
-    r = ec2.describe_security_groups()
+    f = [ dict(Name=n,Values=[v]) for n,v in [ s.split('=') for s in filters] ]
+    r = ec2.describe_security_groups(Filters=f)
     rows = []
     for sg in r['SecurityGroups']:
         header = True 
@@ -67,14 +82,14 @@ def listsg():
         if perm:
             for p in perm:
                 if header:
-                    row = extract(sg,'name:GroupName','id:GroupId','description:Description')
+                    row = extract(sg,*fields)
                     row['ports'] = p
                     header = False
                 else:
                     row = {'ports':p}
                 rows.append(row)
         else:
-             rows.append(extract(sg,'name:GroupName','id:GroupId','description:Description'))
+            row = extract(sg,*fields)
     print(tabulate(rows,headers='keys'))
 
 @cli.command()
@@ -108,9 +123,46 @@ def delsg(id):
     ec2.delete_security_group(GroupId=id)
 
 @cli.command()
+@click.option('--id',required=True,help="Instance Id")
+@click.option('--user',default="ec2-user",help="User Id")
+@click.argument('cmd',nargs=-1)
+def ssh(id,user,cmd):
+    ec2 = boto3.resource('ec2')
+    instance = ec2.Instance(id=id)
+    key = instance.key_name
+    ip = instance.public_ip_address
+    keypath = '{home}/.ssh/{key}'.format(home=os.getenv('HOME'),key=key)
+    args = [ 'ssh', 
+             '-i', keypath,
+             '-l', user,
+             ip ]
+    if cmd:
+        args.extend([' '.join(cmd)])
+    subprocess.run(args)
+
+@cli.command()
+@click.option('--id',required=True,help="Instance Id")
+@click.option('--start',is_flag=True)
+@click.option('--stop',is_flag=True)
+@click.option('--terminate',is_flag=True)
+def cmd(id,start,stop,terminate):
+    ec2 = boto3.resource('ec2')
+    instance = ec2.Instance(id=id)
+    if start:
+        r = instance.start()
+    elif stop:
+        r = instance.stop()
+    elif terminate:
+        r = instance.terminate()
+    else:
+        click.echo("No action specified",err=True)
+    pprint(r)
+
+@cli.command()
+@click.option("--filters",multiple=True,help="SG name")
 @click.option("--fields",help="Display fields")
-def ls(fields):
-    fields = fields.split if fields else """
+def ls(filters,fields):
+    fields = fields.split() if fields else """
         id:InstanceId
         type:InstanceType
         ip:PublicIpAddress?
@@ -121,12 +173,46 @@ def ls(fields):
         security[,]:SecurityGroups.[].GroupId
     """.split()
     ec2 = boto3.client('ec2')
-    r = ec2.describe_instances()
+    f = [ dict(Name=n,Values=[v]) for n,v in [ s.split('=') for s in filters] ]
+    r = ec2.describe_instances(Filters=f)
     data = []
-    for i in getpath(r,'Reservations.[].Instances?'):
+    for i in getpath(r,'Reservations.[].Instances?.[0]'):
         f = extract(i,*fields)
         data.append(extract(i,*fields))
     print(tabulate(data,headers='keys'))
+
+@cli.command()
+@click.option("--ami",required=True,help="AMI Image Id")
+@click.option("--key",required=True,help="Keypair Name")
+@click.option("--type",default="t2.micro",help="Instance Type")
+@click.option('--zone',help='Availability zone')
+@click.option("--min",default=1,help="Min Instances")
+@click.option("--max",default=1,help="Max Instances")
+@click.option("--sg",multiple=True,help="Security Group Ids")
+def new(ami,key,type,zone,min,max,sg):
+    ec2 = boto3.resource('ec2')
+    if zone:
+        response = ec2.create_instances(
+                ImageId=ami,
+                KeyName=key,
+                InstanceType=type,
+                Placement={'AvailabilityZone':zone},
+                MinCount=min,
+                MaxCount=max,
+                SecurityGroupIds=sg
+        )
+    else:
+        response = ec2.create_instances(
+                ImageId=ami,
+                KeyName=key,
+                InstanceType=type,
+                MinCount=min,
+                MaxCount=max,
+                SecurityGroupIds=sg
+        )
+    pprint(response)
+
+
 
 if __name__ == '__main__':
     cli()
